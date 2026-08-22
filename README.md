@@ -129,6 +129,7 @@ curl -X DELETE http://127.0.0.1:8000/target     # очистка приёмни�
 БД для тестов **не нужна** — соединения мокаются (`MagicMock`), тесты быстрые и детерминированные.
 
 ```bash
+pytest tests/test_source.py -v
 pytest              # все тесты
 pytest -v           # подробный вывод
 pytest tests/test_source.py   # только тесты БД-1
