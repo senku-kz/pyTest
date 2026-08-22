@@ -1,0 +1,22 @@
+# Виртуальное окружение
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.Python
+
+# Настройки окружения (в репозиторий не коммитим — есть .env.example)
+.env
+
+# pytest
+.pytest_cache/
+
+# IDE / редакторы
+.vscode/
+.idea/
+
+# macOS
+.DS_Store

@@ -1,0 +1,44 @@
+# Две БД PostgreSQL:
+#   db1 (источник)  — из неё сервис ЧИТАЕТ данные
+#   db2 (приёмник)  — в неё сервис ЗАПИСЫВАЕТ данные
+#
+# Запуск:   docker compose up -d
+# Остановка: docker compose down
+#
+# Пауза db1 для эмуляции обрыва соединения (retry-тесты):
+#   docker compose pause db1
+#   docker compose unpause db1
+#
+# volumes НЕ используем: проект учебный, данные эфемерны — после `down`
+# базы очищаются, схему и seed применяем заново.
+
+services:
+  db1:
+    image: postgres:16
+    container_name: pytest_db1_source
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: source_db
+    ports:
+      - "5442:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d source_db"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  db2:
+    image: postgres:16
+    container_name: pytest_db2_target
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: target_db
+    ports:
+      - "5443:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d target_db"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
