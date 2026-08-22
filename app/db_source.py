@@ -51,15 +51,18 @@ def connect_source():
             )
         except psycopg.OperationalError as error:
             logger.warning("Соединение с БД-1: попытка %d не удалась: %s", attempt, error)
-            if attempt >= config.RETRY_MAX_ATTEMPTS:
+            if attempt < config.RETRY_MAX_ATTEMPTS:
+                # попытки ещё есть — ждём и повторяем
+                delay = config.RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                logger.info("Ждём %.2f с перед следующей попыткой", delay)
+                time.sleep(delay)
+            else:
+                # попытки кончились — сдаёмся
                 logger.error(
                     "Соединение с БД-1: все %d попыток исчерпаны",
                     config.RETRY_MAX_ATTEMPTS,
                 )
                 raise  # пробрасываем ошибку наружу
-            delay = config.RETRY_BASE_DELAY * (2 ** (attempt - 1))
-            logger.info("Ждём %.2f с перед следующей попыткой", delay)
-            time.sleep(delay)
 
 
 def read_table(conn, sql, what):
@@ -84,12 +87,15 @@ def read_table(conn, sql, what):
             return rows
         except psycopg.OperationalError as error:
             logger.warning("%s: попытка %d не удалась: %s", what, attempt, error)
-            if attempt >= config.RETRY_MAX_ATTEMPTS:
+            if attempt < config.RETRY_MAX_ATTEMPTS:
+                # попытки ещё есть — ждём и повторяем
+                delay = config.RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                logger.info("Ждём %.2f с перед следующей попыткой", delay)
+                time.sleep(delay)
+            else:
+                # попытки кончились — прерываем перенос
                 logger.error("%s: все %d попыток исчерпаны", what, config.RETRY_MAX_ATTEMPTS)
-                raise  # прерываем перенос — дальше не идём
-            delay = config.RETRY_BASE_DELAY * (2 ** (attempt - 1))
-            logger.info("Ждём %.2f с перед следующей попыткой", delay)
-            time.sleep(delay)
+                raise  # дальше не идём
 
 
 def read_source(conn):
