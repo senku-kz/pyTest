@@ -1,17 +1,9 @@
 """Тесты работы с БД-2 (приёмник): подключение без повторов и запись."""
 
-from unittest.mock import MagicMock
-
 import psycopg
 import pytest
 
 import app.db_target as target
-
-
-def make_conn():
-    conn = MagicMock()
-    cur = conn.cursor.return_value.__enter__.return_value
-    return conn, cur
 
 
 def test_connect_target_has_no_retry(monkeypatch):
@@ -30,7 +22,7 @@ def test_connect_target_has_no_retry(monkeypatch):
     assert calls["n"] == 1
 
 
-def test_write_employees_inserts_rows():
+def test_write_employees_inserts_rows(make_conn):
     """Есть строки → executemany + commit, возвращается число вставленных."""
     conn, cur = make_conn()
     cur.rowcount = 3
@@ -43,7 +35,7 @@ def test_write_employees_inserts_rows():
     conn.commit.assert_called_once()
 
 
-def test_write_employees_empty_does_nothing():
+def test_write_employees_empty_does_nothing(make_conn):
     """Пустой список → 0, запись не выполняется."""
     conn, _ = make_conn()
 

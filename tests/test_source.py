@@ -24,13 +24,6 @@ def no_sleep(monkeypatch):
     monkeypatch.setattr("app.db_source.time.sleep", lambda _: None)
 
 
-def make_conn():
-    """Фейковое соединение с курсором-контекст-менеджером (conn, cur)."""
-    conn = MagicMock()
-    cur = conn.cursor.return_value.__enter__.return_value
-    return conn, cur
-
-
 # ------------------------- connect_source -------------------------
 
 def test_connect_source_retries_then_succeeds(monkeypatch):
@@ -119,7 +112,8 @@ def test_connect_source_uses_expected_parameters(monkeypatch):
 
 # ------------------------- read_table -------------------------
 
-def test_read_succeeds_on_first_try():
+def test_read_succeeds_on_first_try(make_conn):
+    """Данные есть сразу → одна попытка."""
     conn, cur = make_conn()
     cur.fetchall.return_value = [(1, "DEV"), (2, "QA")]
 
@@ -129,7 +123,7 @@ def test_read_succeeds_on_first_try():
     assert cur.execute.call_count == 1
 
 
-def test_read_retries_after_connection_drop():
+def test_read_retries_after_connection_drop(make_conn):
     """execute падает с OperationalError 2 раза, на 3-й — успех."""
     conn, cur = make_conn()
     cur.execute.side_effect = [
@@ -145,7 +139,7 @@ def test_read_retries_after_connection_drop():
     assert cur.execute.call_count == 3
 
 
-def test_read_retries_on_query_timeout():
+def test_read_retries_on_query_timeout(make_conn):
     """Долгий запрос отменяется (QueryCanceled), повтор — и успех."""
     conn, cur = make_conn()
     cur.execute.side_effect = [
@@ -160,7 +154,7 @@ def test_read_retries_on_query_timeout():
     assert cur.execute.call_count == 2
 
 
-def test_read_gives_up_on_persistent_timeout():
+def test_read_gives_up_on_persistent_timeout(make_conn):
     """Запрос отменяется всегда → ровно N попыток, затем ошибка наружу."""
     conn, cur = make_conn()
     cur.execute.side_effect = errors.QueryCanceled("timeout")
@@ -171,7 +165,7 @@ def test_read_gives_up_on_persistent_timeout():
     assert cur.execute.call_count == source.config.RETRY_MAX_ATTEMPTS
 
 
-def test_read_retries_until_data():
+def test_read_retries_until_data(make_conn):
     """Первые 2 раза пусто, на 3-й — данные → попыток ровно 3."""
     conn, cur = make_conn()
     cur.fetchall.side_effect = [[], [], [(1, "DEV")]]
@@ -182,7 +176,7 @@ def test_read_retries_until_data():
     assert cur.execute.call_count == 3
 
 
-def test_read_gives_up_when_always_empty():
+def test_read_gives_up_when_always_empty(make_conn):
     """Всегда пусто → ровно N попыток, затем ошибка."""
     conn, cur = make_conn()
     cur.fetchall.return_value = []
@@ -193,7 +187,7 @@ def test_read_gives_up_when_always_empty():
     assert cur.execute.call_count == source.config.RETRY_MAX_ATTEMPTS
 
 
-def test_read_backoff_between_attempts(monkeypatch):
+def test_read_backoff_between_attempts(make_conn, monkeypatch):
     """Между попытками растущие паузы: base, base*2."""
     delays = []
     monkeypatch.setattr("app.db_source.time.sleep", delays.append)
@@ -207,7 +201,7 @@ def test_read_backoff_between_attempts(monkeypatch):
     assert delays == pytest.approx([base, base * 2])
 
 
-def test_read_does_not_retry_on_non_connection_error():
+def test_read_does_not_retry_on_non_connection_error(make_conn):
     """Ошибка НЕ про соединение (кривой SQL) → без повторов, сразу наружу."""
     conn, cur = make_conn()
     cur.execute.side_effect = psycopg.ProgrammingError("syntax error")
@@ -218,7 +212,7 @@ def test_read_does_not_retry_on_non_connection_error():
     assert cur.execute.call_count == 1  # повторов не было
 
 
-def test_read_retries_across_different_errors():
+def test_read_retries_across_different_errors(make_conn):
     """Разные подвиды ошибки соединения подряд → всё равно повтор и успех."""
     conn, cur = make_conn()
     cur.execute.side_effect = [
