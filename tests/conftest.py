@@ -7,6 +7,6 @@ from app.main import app
 
 
 @pytest.fixture
-def client() -> TestClient:
+def client():
     """HTTP-клиент FastAPI для тестов API."""
     return TestClient(app)

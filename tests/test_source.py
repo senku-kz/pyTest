@@ -67,6 +67,56 @@ def test_connect_source_gives_up_after_max_attempts(monkeypatch):
     assert calls["n"] == source.config.RETRY_MAX_ATTEMPTS
 
 
+def test_connect_source_succeeds_on_first_try(monkeypatch):
+    """БД-1 доступна сразу → одна попытка, пауз нет."""
+    slept = []
+    monkeypatch.setattr("app.db_source.time.sleep", slept.append)
+    monkeypatch.setattr(psycopg, "connect", lambda dsn, **kwargs: "готовое-соединение")
+
+    conn = source.connect_source()
+
+    assert conn == "готовое-соединение"
+    assert slept == []
+
+
+def test_connect_source_backoff_between_attempts(monkeypatch):
+    """Между попытками подключения растущие паузы: base, base*2."""
+    delays = []
+    monkeypatch.setattr("app.db_source.time.sleep", delays.append)
+
+    def always_down(dsn, **kwargs):
+        raise psycopg.OperationalError("down")
+
+    monkeypatch.setattr(psycopg, "connect", always_down)
+
+    with pytest.raises(psycopg.OperationalError):
+        source.connect_source()
+
+    base = source.config.RETRY_BASE_DELAY
+    assert delays == pytest.approx([base, base * 2])
+
+
+def test_connect_source_uses_expected_parameters(monkeypatch):
+    """Подключение к БД-1 идёт с нужными таймаутами и autocommit."""
+    captured = {}
+
+    def fake_connect(dsn, **kwargs):
+        captured["dsn"] = dsn
+        captured.update(kwargs)
+        return "conn"
+
+    monkeypatch.setattr(psycopg, "connect", fake_connect)
+
+    source.connect_source()
+
+    assert captured["dsn"] == source.config.SOURCE_DSN
+    assert captured["connect_timeout"] == source.config.CONNECT_TIMEOUT
+    assert captured["tcp_user_timeout"] == source.config.TCP_USER_TIMEOUT_MS
+    assert captured["autocommit"] is True
+    # statement_timeout передаётся через options="-c statement_timeout=..."
+    assert f"statement_timeout={source.config.STATEMENT_TIMEOUT_MS}" in captured["options"]
+
+
 # ------------------------- read_table -------------------------
 
 def test_read_succeeds_on_first_try():
@@ -157,6 +207,33 @@ def test_read_backoff_between_attempts(monkeypatch):
     assert delays == pytest.approx([base, base * 2])
 
 
+def test_read_does_not_retry_on_non_connection_error():
+    """Ошибка НЕ про соединение (кривой SQL) → без повторов, сразу наружу."""
+    conn, cur = make_conn()
+    cur.execute.side_effect = psycopg.ProgrammingError("syntax error")
+
+    with pytest.raises(psycopg.ProgrammingError):
+        source.read_table(conn, "SELECT ...", "Чтение division")
+
+    assert cur.execute.call_count == 1  # повторов не было
+
+
+def test_read_retries_across_different_errors():
+    """Разные подвиды ошибки соединения подряд → всё равно повтор и успех."""
+    conn, cur = make_conn()
+    cur.execute.side_effect = [
+        psycopg.OperationalError("обрыв"),
+        errors.QueryCanceled("таймаут долгого запроса"),
+        None,
+    ]
+    cur.fetchall.return_value = [(1, "DEV")]
+
+    rows = source.read_table(conn, "SELECT ...", "Чтение division")
+
+    assert rows == [(1, "DEV")]
+    assert cur.execute.call_count == 3
+
+
 # ------------------------- read_source: поэтапно + short-circuit -------------------------
 
 def test_read_source_reads_all_tables_in_order(monkeypatch):
@@ -188,3 +265,45 @@ def test_read_source_stops_after_first_table_fails(monkeypatch):
         source.read_source(MagicMock())
 
     assert read_order == ["Чтение division"]
+
+
+def test_read_source_stops_when_middle_table_fails(monkeypatch):
+    """Провал на 2-м этапе (position) → employee уже НЕ читается."""
+    read_order = []
+
+    def fake_read_table(conn, sql, what):
+        read_order.append(what)
+        if what == "Чтение position":
+            raise psycopg.OperationalError("сбой на 2-м этапе")
+        return [("data",)]
+
+    monkeypatch.setattr(source, "read_table", fake_read_table)
+
+    with pytest.raises(psycopg.OperationalError):
+        source.read_source(MagicMock())
+
+    assert read_order == ["Чтение division", "Чтение position"]
+
+
+def test_read_source_returns_all_tables_and_reuses_one_connection(monkeypatch):
+    """read_source возвращает три набора и передаёт ОДНО соединение во все чтения."""
+    conn = object()  # маркер-соединение
+    seen_conns = []
+    data = {
+        "Чтение division": [(1, "DEV")],
+        "Чтение position": [(10, "Senior")],
+        "Чтение employee": [(100, "Иван")],
+    }
+
+    def fake_read_table(c, sql, what):
+        seen_conns.append(c)
+        return data[what]
+
+    monkeypatch.setattr(source, "read_table", fake_read_table)
+
+    divisions, positions, employees = source.read_source(conn)
+
+    assert divisions == [(1, "DEV")]
+    assert positions == [(10, "Senior")]
+    assert employees == [(100, "Иван")]
+    assert seen_conns == [conn, conn, conn]  # одно и то же соединение
